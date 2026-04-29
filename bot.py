@@ -9,7 +9,7 @@ import logging
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
 
 from config import TELEGRAM_BOT_TOKEN
-from gemini_client import initialize_gemini
+from gemini import configure_gemini
 from handlers import start_command, help_command, reset_command, handle_message
 
 
@@ -35,7 +35,7 @@ def main():
 
     # Initialize Gemini API
     try:
-        initialize_gemini()
+        configure_gemini()
         logger.info("[OK] Gemini API initialized successfully.")
     except ValueError as e:
         print(f"ERROR: {e}")

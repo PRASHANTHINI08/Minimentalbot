@@ -1,0 +1,86 @@
+================================================================
+   WHY THE OLD gemini_client.py CODE FAILED — ROOT CAUSE ANALYSIS
+================================================================
+
+
+PROBLEM 1: WRONG SDK (google-genai vs google.generativeai)
+-----------------------------------------------------------
+The old code imported and used the brand-new "google-genai" SDK:
+
+    from google import genai
+    client = genai.Client(api_key=GEMINI_API_KEY)
+    response = await client.aio.models.generate_content(...)
+
+BUT the "gemini-flash-latest" model name and the start_chat() API
+only work correctly with the OLDER "google.generativeai" SDK.
+
+The fix (matching the working Therapy repo):
+
+    import google.generativeai as genai
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel(model_name="gemini-flash-latest", ...)
+
+These are two completely separate Python libraries with different
+method signatures, authentication flows, and quota enforcement.
+The new SDK was applying stricter free-tier quota restrictions on
+the same API key that the old SDK accepted without issues.
+
+
+PROBLEM 2: WRONG CHAT HISTORY FORMAT (wrong keys and wrong role names)
+-----------------------------------------------------------------------
+The old code stored chat history using "content" and "bot":
+
+    {"role": "user", "content": user_message}   <-- "content" key (WRONG)
+    {"role": "bot",  "content": bot_response}   <-- "bot" role   (WRONG)
+
+The google.generativeai SDK STRICTLY requires "parts" as the key
+and "model" as the role for assistant messages:
+
+    {"role": "user",  "parts": user_message}    <-- "parts" key  (CORRECT)
+    {"role": "model", "parts": bot_response}    <-- "model" role (CORRECT)
+
+Using the wrong keys causes the SDK to either silently fail or
+send a completely malformed conversation history to the Gemini API,
+resulting in broken or empty responses.
+
+
+PROBLEM 3: HISTORY PASSED INCORRECTLY TO THE GEMINI API
+---------------------------------------------------------
+The old code passed the user message as a SEPARATE function argument,
+and the current user message was NEVER included in the history when
+the API was called:
+
+    bot_response = await generate_response(user_message, chat_history)
+    # Inside generate_response, history was appended AFTER the API call
+
+The working approach (matching Therapy repo) appends the user message
+to chat_history BEFORE calling the API, then correctly splits it:
+
+    chat_history.append({"role": "user", "parts": user_message})
+    history       = conversation_history[:-1]          # previous messages
+    latest_message = conversation_history[-1]["parts"] # current message
+    chat = model.start_chat(history=history)
+    response = await chat.send_message_async(latest_message)
+
+This is how start_chat() expects to receive data. The old approach
+was structurally incompatible with how the SDK processes conversations.
+
+
+================================================================
+   SUMMARY
+================================================================
+
+Issue             | Old Code              | Fixed Code
+------------------|-----------------------|------------------------
+SDK Package       | google-genai (new)    | google.generativeai (old)
+History Key       | "content"             | "parts"
+Assistant Role    | "bot"                 | "model"
+Message Timing    | Appended after API    | Appended before API
+API Method        | client.aio.models...  | model.start_chat()
+
+All three bugs combined meant that every single API call was sending
+a malformed request. The code wasn't broken because of a rate limit —
+it was broken because the data being sent to Google was in the wrong
+format for the library being used.
+
+================================================================

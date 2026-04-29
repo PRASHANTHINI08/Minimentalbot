@@ -6,7 +6,7 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from config import MAX_HISTORY_LENGTH
-from gemini_client import generate_response
+from gemini import get_gemini_response
 from safety import check_safety, get_safety_resources
 
 
@@ -76,19 +76,29 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     chat_history = context.user_data["chat_history"]
 
+    # Append user message first (like Therapy repo does)
+    chat_history.append({"role": "user", "parts": user_message})
+
     # Send typing indicator while generating response
     await update.message.chat.send_action("typing")
 
-    # Generate AI response
-    bot_response = generate_response(user_message, chat_history)
+    try:
+        # Generate AI response
+        bot_response = await get_gemini_response(chat_history)
 
-    # Check for crisis keywords and append safety resources
-    if check_safety(user_message):
-        bot_response += get_safety_resources()
+        # Check for crisis keywords and append safety resources
+        if check_safety(user_message):
+            bot_response += get_safety_resources()
 
-    # Update chat history
-    chat_history.append({"role": "user", "content": user_message})
-    chat_history.append({"role": "bot", "content": bot_response})
+        # Update chat history with model response
+        chat_history.append({"role": "model", "parts": bot_response})
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Gemini API error: {e}")
+        if chat_history:
+            chat_history.pop()
+        bot_response = "I'm having a little trouble right now, please try again in a moment 💙"
 
     # Trim history to keep only the last N message pairs
     if len(chat_history) > MAX_HISTORY_LENGTH * 2:
